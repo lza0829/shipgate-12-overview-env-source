@@ -2,7 +2,8 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from app.db import db, rows_to_list
-from app.services.common import audit, now_str, set_app_env_version
+from app.services.common import audit, now_str
+from app.services.projection import projection_stamp, rebuild_projection, roster_view
 
 router = APIRouter(tags=["应用"])
 
@@ -23,6 +24,13 @@ def list_apps():
         )
 
 
+@router.get("/应用名册")
+def app_roster():
+    """名册三环境版本列：读分布事件投影缓存，与总览/对账同一真源。"""
+    with db() as conn:
+        return {"名册": roster_view(conn), "投影": projection_stamp(conn)}
+
+
 @router.post("/应用")
 def create_app(body: AppIn):
     if body.状态 not in ("启用", "停用"):
@@ -36,10 +44,10 @@ def create_app(body: AppIn):
         except Exception:
             raise HTTPException(400, "应用名已存在")
         aid = cur.lastrowid
-        for env in conn.execute("SELECT id FROM environments").fetchall():
-            set_app_env_version(conn, aid, env["id"], "")
+        # 新应用无任何分布事件：重投影后三环境列均为空版本（空事件集语义）
+        task = rebuild_projection(conn, triggered_by="新建应用", note=body.名称)
         audit(conn, "应用", aid, "新建应用", body.名称)
-        return {"编号": aid}
+        return {"编号": aid, "投影": task}
 
 
 @router.patch("/应用/{app_id}")

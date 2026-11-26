@@ -2,7 +2,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from app.db import db, init_db
-from app.services.common import audit, now_str, set_app_env_version, upsert_instance
+from app.services.common import audit, now_str, upsert_instance
+from app.services.projection import rebuild_projection, record_event
 
 
 def seed_if_empty() -> None:
@@ -24,12 +25,20 @@ def seed_if_empty() -> None:
         app = conn.execute("SELECT id FROM apps WHERE name='结算网关'").fetchone()["id"]
         app2 = conn.execute("SELECT id FROM apps WHERE name='配置投递'").fetchone()["id"]
         envs = {r["code"]: r["id"] for r in conn.execute("SELECT * FROM environments").fetchall()}
+        # 基线版本以“基线落地”分布事件进入真源；名册只由后续重投影生成
         for aid, vers in (
             (app, {"测": "1.2.0", "预": "1.1.0", "产": "1.0.0"}),
             (app2, {"测": "0.9.1", "预": "0.9.0", "产": "0.8.5"}),
         ):
             for code, ver in vers.items():
-                set_app_env_version(conn, aid, envs[code], ver)
+                record_event(
+                    conn,
+                    app_id=aid,
+                    kind="基线落地",
+                    version=ver,
+                    to_env_id=envs[code],
+                    note="种子基线",
+                )
                 upsert_instance(conn, aid, envs[code], ver, "探针绿", None)
 
         open_at = (datetime.now() - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
@@ -58,21 +67,32 @@ def seed_if_empty() -> None:
             """
             INSERT INTO releases(
               serial, app_id, target_version, artifact_digest, status, pipeline_status,
-              current_env_id, canary_ratio, note, created_at, admitted_at
-            ) VALUES (?, ?, ?, ?, '已入闸', '绿', ?, 10, ?, ?, ?)
+              canary_ratio, note, created_at, admitted_at
+            ) VALUES (?, ?, ?, ?, '已入闸', '绿', 10, ?, ?, ?)
             """,
             (
                 f"发{datetime.now().strftime('%Y%m%d')}0001",
                 app,
                 "1.3.0",
                 "sha256:seed-demo-artifact",
-                envs["测"],
                 "种子可晋升发版单",
                 now,
                 now,
             ),
         )
         rid = conn.execute("SELECT id FROM releases ORDER BY id DESC LIMIT 1").fetchone()["id"]
+        # 种子发版单已入测：入测事件 + 实例，随后统一重投影
+        record_event(
+            conn,
+            app_id=app,
+            release_id=rid,
+            from_env_id=None,
+            to_env_id=envs["测"],
+            kind="入测",
+            version="1.3.0",
+            note="种子入测",
+        )
         upsert_instance(conn, app, envs["测"], "1.3.0", "探针绿", rid)
-        set_app_env_version(conn, app, envs["测"], "1.3.0")
+        # 首次整体重投影：名册三环境列、发版单当前环境、投影任务账本全部由事件流生成
+        rebuild_projection(conn, triggered_by="种子初始化", note="")
         audit(conn, "系统", None, "种子初始化", "发版闸")

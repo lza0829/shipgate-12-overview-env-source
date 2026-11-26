@@ -108,17 +108,6 @@ def active_rollback_window(conn, env_id: int):
     ).fetchone()
 
 
-def set_app_env_version(conn, app_id: int, env_id: int, version: str) -> None:
-    conn.execute(
-        """
-        INSERT INTO app_env_versions(app_id, env_id, version, updated_at)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(app_id, env_id) DO UPDATE SET version=excluded.version, updated_at=excluded.updated_at
-        """,
-        (app_id, env_id, version, now_str()),
-    )
-
-
 def upsert_instance(conn, app_id: int, env_id: int, version: str, health: str, release_id: int | None) -> None:
     row = conn.execute(
         "SELECT id FROM instances WHERE app_id=? AND env_id=? AND version=?",

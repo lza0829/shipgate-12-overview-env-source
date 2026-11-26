@@ -1,6 +1,11 @@
 from __future__ import annotations
 from fastapi import APIRouter
 from app.db import db, rows_to_list
+from app.services.projection import (
+    distribution_diffs,
+    environment_distribution,
+    projection_stamp,
+)
 
 router = APIRouter(tags=["对账"])
 
@@ -8,6 +13,7 @@ router = APIRouter(tags=["对账"])
 @router.get("/对账")
 def reconcile():
     with db() as conn:
+        # 状态统计仍以发版单状态机为准（工作流维度，非环境分布真源）
         release_stats = {
             "申请数": conn.execute("SELECT COUNT(*) AS c FROM releases").fetchone()["c"],
             "已放行": conn.execute(
@@ -23,6 +29,7 @@ def reconcile():
                 """
             ).fetchone()["c"],
         }
+        # 名册（投影缓存）与实例（运行时证据）比对
         version_vs_instance = rows_to_list(
             conn.execute(
                 """
@@ -44,4 +51,9 @@ def reconcile():
             "发版统计": release_stats,
             "晋升事件数": promote_count,
             "名册与实例": version_vs_instance,
+            # 环境分布与总览四格共用同一次重投影
+            "环境分布": environment_distribution(conn),
+            # 缓存与事件流真源的分叉差额；正常应为 0，重放纠偏后归零
+            "对账差额": distribution_diffs(conn),
+            "投影": projection_stamp(conn),
         }

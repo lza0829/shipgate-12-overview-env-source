@@ -11,6 +11,7 @@ from app.services.common import (
     next_serial,
     now_str,
 )
+from app.services.projection import rebuild_projection, record_event
 
 router = APIRouter(tags=["发版单"])
 
@@ -89,14 +90,26 @@ def admit(release_id: int):
             raise HTTPException(400, "同应用已有在途发版单，禁止并行入闸")
         test = conn.execute("SELECT id FROM environments WHERE code='测'").fetchone()
         now = now_str()
+        # 状态机命令侧维护；current_env_id 不再直写，交给分布事件重投影
         conn.execute(
-            """
-            UPDATE releases SET status='已入闸', admitted_at=?, current_env_id=? WHERE id=?
-            """,
-            (now, test["id"], release_id),
+            "UPDATE releases SET status='已入闸', admitted_at=? WHERE id=?",
+            (now, release_id),
         )
+        record_event(
+            conn,
+            app_id=r["app_id"],
+            release_id=release_id,
+            from_env_id=None,
+            to_env_id=test["id"],
+            kind="入测",
+            version=r["target_version"],
+            note=r["serial"],
+        )
+        task = rebuild_projection(conn, triggered_by="入闸", note=r["serial"])
         audit(conn, "发版单", release_id, "入闸", r["serial"])
-        return row_to_dict(get_release(conn, release_id))
+        result = row_to_dict(get_release(conn, release_id))
+        result["投影"] = task
+        return result
 
 
 @router.post("/发版单/{release_id}/流水线")

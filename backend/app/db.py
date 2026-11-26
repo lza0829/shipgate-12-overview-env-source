@@ -57,6 +57,33 @@ CREATE TABLE IF NOT EXISTS promote_events (
   FOREIGN KEY(from_env_id) REFERENCES environments(id),
   FOREIGN KEY(to_env_id) REFERENCES environments(id)
 );
+-- 环境分布唯一真源：分布事件流（事件溯源）。
+-- 名册 app_env_versions 与 releases.current_env_id 仅为该流的投影缓存，
+-- 只能由 app.services.projection 重放写入，命令侧不得直写。
+CREATE TABLE IF NOT EXISTS distribution_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  release_id INTEGER,
+  app_id INTEGER NOT NULL,
+  from_env_id INTEGER,
+  to_env_id INTEGER,
+  kind TEXT NOT NULL CHECK(kind IN ('基线落地','入测','晋升','回滚')),
+  version TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  FOREIGN KEY(release_id) REFERENCES releases(id),
+  FOREIGN KEY(app_id) REFERENCES apps(id),
+  FOREIGN KEY(from_env_id) REFERENCES environments(id),
+  FOREIGN KEY(to_env_id) REFERENCES environments(id)
+);
+-- 投影任务账本：记录最近一次重投影任务号、刷新戳与事件位点
+CREATE TABLE IF NOT EXISTS projection_meta (
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  task_no INTEGER NOT NULL DEFAULT 0,
+  last_event_id INTEGER NOT NULL DEFAULT 0,
+  projected_at TEXT NOT NULL DEFAULT '',
+  triggered_by TEXT NOT NULL DEFAULT '',
+  repaired_rows INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS release_windows (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   env_id INTEGER NOT NULL,
